@@ -70,30 +70,46 @@
             const [showAddReminder, setShowAddReminder] = useState(false);
 
             useEffect(() => {
-                const vehiclesData = localStorage.getItem('vehicles');
-                const recordsData = localStorage.getItem('records');
-                const remindersData = localStorage.getItem('reminders');
-                
-                if (vehiclesData) setVehicles(JSON.parse(vehiclesData));
-                if (recordsData) setRecords(JSON.parse(recordsData));
-                if (remindersData) setReminders(JSON.parse(remindersData));
+                try {
+                    const vehiclesData = localStorage.getItem('vehicles');
+                    const recordsData = localStorage.getItem('records');
+                    const remindersData = localStorage.getItem('reminders');
+                    
+                    if (vehiclesData) setVehicles(JSON.parse(vehiclesData));
+                    if (recordsData) setRecords(JSON.parse(recordsData));
+                    if (remindersData) setReminders(JSON.parse(remindersData));
+                } catch (error) {
+                    console.error('Error loading data:', error);
+                }
             }, []);
 
             useEffect(() => {
-                if (vehicles.length > 0) {
-                    localStorage.setItem('vehicles', JSON.stringify(vehicles));
+                try {
+                    if (vehicles.length > 0) {
+                        localStorage.setItem('vehicles', JSON.stringify(vehicles));
+                    }
+                } catch (error) {
+                    console.error('Error saving vehicles:', error);
                 }
             }, [vehicles]);
 
             useEffect(() => {
-                if (records.length > 0) {
-                    localStorage.setItem('records', JSON.stringify(records));
+                try {
+                    if (records.length > 0) {
+                        localStorage.setItem('records', JSON.stringify(records));
+                    }
+                } catch (error) {
+                    console.error('Error saving records:', error);
                 }
             }, [records]);
 
             useEffect(() => {
-                if (reminders.length > 0) {
-                    localStorage.setItem('reminders', JSON.stringify(reminders));
+                try {
+                    if (reminders.length > 0) {
+                        localStorage.setItem('reminders', JSON.stringify(reminders));
+                    }
+                } catch (error) {
+                    console.error('Error saving reminders:', error);
                 }
             }, [reminders]);
 
@@ -142,7 +158,7 @@
 
             const updateVehicleMileage = (mileage) => {
                 setVehicles(vehicles.map(v => 
-                    v.id === selectedVehicle ? { ...v, currentMileage: parseInt(mileage) } : v
+                    v.id === selectedVehicle ? { ...v, currentMileage: parseInt(mileage) || 0 } : v
                 ));
             };
 
@@ -563,4 +579,155 @@
                                 <label className="block text-sm font-medium mb-1">Service Type</label>
                                 <select
                                     value={formData.service}
-                                    onChange={(e)
+                                    onChange={(e) => setFormData({ ...formData, service: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg"
+                                >
+                                    <option value="">Select service...</option>
+                                    {commonServices.map(service => (
+                                        <option key={service} value={service}>{service}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <input
+                                type="date"
+                                value={formData.date}
+                                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            />
+                            <input
+                                type="number"
+                                placeholder="Mileage at service"
+                                value={formData.mileage}
+                                onChange={(e) => setFormData({ ...formData, mileage: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            />
+                            <input
+                                type="number"
+                                step="0.01"
+                                placeholder="Cost ($)"
+                                value={formData.cost}
+                                onChange={(e) => setFormData({ ...formData, cost: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            />
+                            <input
+                                type="text"
+                                placeholder="Service provider (optional)"
+                                value={formData.provider}
+                                onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            />
+                            <textarea
+                                placeholder="Notes (optional)"
+                                value={formData.notes}
+                                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                                rows="3"
+                            />
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleSubmit}
+                                    className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700"
+                                >
+                                    Add Record
+                                </button>
+                                <button
+                                    onClick={onClose}
+                                    className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const AddReminderModal = ({ onClose, onAdd }) => {
+            const [formData, setFormData] = useState({
+                service: '',
+                type: 'mileage',
+                mileage: '',
+                date: ''
+            });
+
+            const handleSubmit = () => {
+                if (!formData.service) return;
+                if (formData.type === 'mileage' && !formData.mileage) return;
+                if (formData.type === 'date' && !formData.date) return;
+
+                const reminder = {
+                    service: formData.service,
+                    type: formData.type
+                };
+                if (formData.type === 'mileage') {
+                    reminder.mileage = parseInt(formData.mileage);
+                } else {
+                    reminder.date = formData.date;
+                }
+                onAdd(reminder);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                        <h2 className="text-2xl font-bold mb-4">Add Reminder</h2>
+                        <div className="space-y-4">
+                            <input
+                                type="text"
+                                placeholder="Service (e.g., Oil Change)"
+                                value={formData.service}
+                                onChange={(e) => setFormData({ ...formData, service: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            />
+                            <div>
+                                <label className="block text-sm font-medium mb-1">Reminder Type</label>
+                                <select
+                                    value={formData.type}
+                                    onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg"
+                                >
+                                    <option value="mileage">By Mileage</option>
+                                    <option value="date">By Date</option>
+                                </select>
+                            </div>
+                            {formData.type === 'mileage' ? (
+                                <input
+                                    type="number"
+                                    placeholder="Mileage (e.g., 75000)"
+                                    value={formData.mileage}
+                                    onChange={(e) => setFormData({ ...formData, mileage: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg"
+                                />
+                            ) : (
+                                <input
+                                    type="date"
+                                    value={formData.date}
+                                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg"
+                                />
+                            )}
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleSubmit}
+                                    className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700"
+                                >
+                                    Add Reminder
+                                </button>
+                                <button
+                                    onClick={onClose}
+                                    className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<VehicleMaintenanceTracker />, document.getElementById('root'));
+    </script>
+</body>
+</html>
