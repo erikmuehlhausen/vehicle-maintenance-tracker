@@ -22,17 +22,8 @@
             'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwZW5wY21vbHlkZXVtdHNrZHFqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk0NTg5ODcsImV4cCI6MjA4NTAzNDk4N30.NE48F2WNqTwPeH9SvdPaeD7f2u4kbY_wYjSu-6xh1-0'
         );
 
-        // Get or create user ID
-        const getUserId = () => {
-            let userId = localStorage.getItem('userId');
-            if (!userId) {
-                userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-                localStorage.setItem('userId', userId);
-            }
-            return userId;
-        };
-
-        const USER_ID = getUserId();
+        // Fixed user ID for syncing across all devices
+        const USER_ID = 'erik_main_user';
 
         // Lucide icons
         const Plus = ({ size = 24, className = "" }) => (
