@@ -1243,6 +1243,7 @@
         };
 
         const QuickAddModal = ({ onClose, onRefresh, categories, items }) => {
+            const [mode, setMode] = useState(''); // 'item' or 'log'
             const [formData, setFormData] = useState({
                 category: '',
                 itemId: '',
@@ -1250,12 +1251,23 @@
                 date: new Date().toISOString().split('T')[0],
                 cost: '',
                 notes: '',
-                file: null
+                file: null,
+                // New item fields
+                year: '',
+                make: '',
+                model: '',
+                current_mileage: '',
+                name: '',
+                type: '',
+                birthdate: ''
             });
             const [error, setError] = useState(null);
             const [isSubmitting, setIsSubmitting] = useState(false);
 
-            const handleSubmit = async () => {
+            const config = formData.category ? CATEGORY_CONFIGS[formData.category] : null;
+            const categoryItems = formData.category ? items.filter(i => i.category_id === formData.category) : [];
+
+            const handleSubmitLog = async () => {
                 setError(null);
                 
                 // 🛡️ Rate limit check
@@ -1308,7 +1320,6 @@
                 if (formData.file) {
                     const uploadResult = await SecureDB.uploadFile(formData.file);
                     if (!uploadResult.success) {
-                        // Log was saved but file upload failed - notify user
                         setError(`Log saved, but file upload failed: ${uploadResult.error}`);
                         setIsSubmitting(false);
                         onRefresh();
@@ -1321,14 +1332,302 @@
                 onClose();
             };
 
-            const config = formData.category ? CATEGORY_CONFIGS[formData.category] : null;
-            const categoryItems = formData.category ? items.filter(i => i.category_id === formData.category) : [];
+            const handleSubmitItem = async () => {
+                setError(null);
+                
+                // 🛡️ Rate limit check
+                if (!rateLimiters.addItem()) {
+                    setError('Too many requests. Please wait a moment.');
+                    return;
+                }
+                
+                // 🛡️ Validation based on category
+                if (formData.category === 'vehicles') {
+                    if (!SecurityUtils.isValidYear(formData.year)) {
+                        setError('Please enter a valid year (1900-present)');
+                        return;
+                    }
+                    if (!formData.make?.trim() || !formData.model?.trim()) {
+                        setError('Make and model are required');
+                        return;
+                    }
+                    if (formData.current_mileage && !SecurityUtils.isValidMileage(formData.current_mileage)) {
+                        setError('Please enter a valid mileage');
+                        return;
+                    }
+                }
+                
+                if (formData.category === 'pets') {
+                    if (!formData.name?.trim()) {
+                        setError('Pet name is required');
+                        return;
+                    }
+                    if (formData.birthdate && !SecurityUtils.isValidDate(formData.birthdate)) {
+                        setError('Please enter a valid birthdate');
+                        return;
+                    }
+                }
+                
+                setIsSubmitting(true);
 
+                const newItem = {
+                    id: SecurityUtils.generateUUID(),
+                    user_id: USER_ID,
+                    category_id: formData.category,
+                    name: formData.category === 'vehicles' 
+                        ? SecurityUtils.sanitizeString(`${formData.year} ${formData.make} ${formData.model}`, 200)
+                        : SecurityUtils.sanitizeString(formData.name, 200),
+                    details: formData.category === 'vehicles' 
+                        ? {
+                            year: SecurityUtils.sanitizeString(formData.year, 4),
+                            make: SecurityUtils.sanitizeString(formData.make, 50),
+                            model: SecurityUtils.sanitizeString(formData.model, 50),
+                            current_mileage: formData.current_mileage || ''
+                        }
+                        : {
+                            name: SecurityUtils.sanitizeString(formData.name, 100),
+                            type: SecurityUtils.sanitizeString(formData.type, 50),
+                            birthdate: formData.birthdate || ''
+                        }
+                };
+
+                const result = await SecureDB.insertData(
+                    'items',
+                    newItem,
+                    ['id', 'user_id', 'category_id', 'name', 'details']
+                );
+                
+                if (!result.success) {
+                    setError(result.error);
+                    setIsSubmitting(false);
+                    return;
+                }
+
+                // 🛡️ Secure photo upload
+                if (formData.file) {
+                    const uploadResult = await SecureDB.uploadFile(formData.file);
+                    if (!uploadResult.success) {
+                        setError(`Item saved, but photo upload failed: ${uploadResult.error}`);
+                        setIsSubmitting(false);
+                        onRefresh();
+                        return;
+                    }
+                }
+
+                setIsSubmitting(false);
+                onRefresh();
+                onClose();
+            };
+
+            // Mode selection screen
+            if (!mode) {
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                        <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-2xl font-bold">Quick Add</h2>
+                                <button onClick={onClose} className="text-gray-500 hover:text-gray-700" aria-label="Close">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            
+                            <p className="text-gray-600 mb-4">What would you like to add?</p>
+                            
+                            <div className="space-y-3">
+                                <button
+                                    onClick={() => setMode('item')}
+                                    className="w-full p-4 border-2 border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="bg-green-100 p-2 rounded-lg">
+                                            <Plus size={24} className="text-green-600" />
+                                        </div>
+                                        <div>
+                                            <p className="font-semibold text-gray-900">New Item</p>
+                                            <p className="text-sm text-gray-500">Add a new vehicle, pet, etc.</p>
+                                        </div>
+                                    </div>
+                                </button>
+                                
+                                <button
+                                    onClick={() => setMode('log')}
+                                    className="w-full p-4 border-2 border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="bg-blue-100 p-2 rounded-lg">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-blue-600">
+                                                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                                                <polyline points="14 2 14 8 20 8"/>
+                                                <line x1="16" y1="13" x2="8" y2="13"/>
+                                                <line x1="16" y1="17" x2="8" y2="17"/>
+                                                <line x1="10" y1="9" x2="8" y2="9"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <p className="font-semibold text-gray-900">New Log</p>
+                                            <p className="text-sm text-gray-500">Log service, visit, or event</p>
+                                        </div>
+                                    </div>
+                                </button>
+                            </div>
+                            
+                            <button
+                                onClick={onClose}
+                                className="w-full mt-4 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            // New Item form
+            if (mode === 'item') {
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                        <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                            <div className="flex justify-between items-center mb-6">
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => setMode('')} className="text-gray-500 hover:text-gray-700">
+                                        <ArrowLeft size={20} />
+                                    </button>
+                                    <h2 className="text-2xl font-bold">New Item</h2>
+                                </div>
+                                <button onClick={onClose} className="text-gray-500 hover:text-gray-700" aria-label="Close">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                            
+                            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">Category</label>
+                                    <select
+                                        value={formData.category}
+                                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                                        className="w-full px-4 py-2 border rounded-lg"
+                                    >
+                                        <option value="">Select category...</option>
+                                        {Object.entries(CATEGORY_CONFIGS).map(([id, cfg]) => (
+                                            <option key={id} value={id}>{cfg.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {formData.category === 'vehicles' && (
+                                    <>
+                                        <input
+                                            type="number"
+                                            placeholder="Year"
+                                            min="1900"
+                                            max={new Date().getFullYear() + 2}
+                                            value={formData.year}
+                                            onChange={(e) => setFormData({ ...formData, year: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Make"
+                                            maxLength={50}
+                                            value={formData.make}
+                                            onChange={(e) => setFormData({ ...formData, make: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Model"
+                                            maxLength={50}
+                                            value={formData.model}
+                                            onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                        <input
+                                            type="number"
+                                            placeholder="Current Mileage (optional)"
+                                            min="0"
+                                            max="2000000"
+                                            value={formData.current_mileage}
+                                            onChange={(e) => setFormData({ ...formData, current_mileage: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                    </>
+                                )}
+
+                                {formData.category === 'pets' && (
+                                    <>
+                                        <input
+                                            type="text"
+                                            placeholder="Name"
+                                            maxLength={100}
+                                            value={formData.name}
+                                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Type (e.g., Dog, Cat)"
+                                            maxLength={50}
+                                            value={formData.type}
+                                            onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                        <input
+                                            type="date"
+                                            placeholder="Birthdate"
+                                            value={formData.birthdate}
+                                            onChange={(e) => setFormData({ ...formData, birthdate: e.target.value })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                    </>
+                                )}
+
+                                {formData.category && (
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">Photo (optional)</label>
+                                        <input
+                                            type="file"
+                                            accept="image/jpeg,image/png,image/gif,image/webp"
+                                            onChange={(e) => setFormData({ ...formData, file: e.target.files[0] })}
+                                            className="w-full px-4 py-2 border rounded-lg"
+                                        />
+                                        <p className="text-xs text-gray-500 mt-1">Max 10MB. JPEG, PNG, GIF, or WebP only.</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex gap-3 mt-6">
+                                <button
+                                    onClick={handleSubmitItem}
+                                    disabled={!formData.category || isSubmitting}
+                                    className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                                >
+                                    {isSubmitting ? 'Adding...' : 'Add Item'}
+                                </button>
+                                <button
+                                    onClick={onClose}
+                                    className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // New Log form (existing behavior)
             return (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
                         <div className="flex justify-between items-center mb-6">
-                            <h2 className="text-2xl font-bold">Quick Add</h2>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setMode('')} className="text-gray-500 hover:text-gray-700">
+                                    <ArrowLeft size={20} />
+                                </button>
+                                <h2 className="text-2xl font-bold">New Log</h2>
+                            </div>
                             <button onClick={onClose} className="text-gray-500 hover:text-gray-700" aria-label="Close">
                                 <X size={24} />
                             </button>
@@ -1345,8 +1644,8 @@
                                     className="w-full px-4 py-2 border rounded-lg"
                                 >
                                     <option value="">Select category...</option>
-                                    {Object.entries(CATEGORY_CONFIGS).map(([id, config]) => (
-                                        <option key={id} value={id}>{config.name}</option>
+                                    {Object.entries(CATEGORY_CONFIGS).map(([id, cfg]) => (
+                                        <option key={id} value={id}>{cfg.name}</option>
                                     ))}
                                 </select>
                             </div>
@@ -1364,6 +1663,11 @@
                                             <option key={item.id} value={item.id}>{item.name}</option>
                                         ))}
                                     </select>
+                                    {categoryItems.length === 0 && (
+                                        <p className="text-sm text-amber-600 mt-2">
+                                            No items yet. <button onClick={() => setMode('item')} className="underline font-medium">Create one first</button>
+                                        </p>
+                                    )}
                                 </div>
                             )}
 
@@ -1425,7 +1729,7 @@
 
                         <div className="flex gap-3 mt-6">
                             <button
-                                onClick={handleSubmit}
+                                onClick={handleSubmitLog}
                                 disabled={!formData.itemId || !formData.logType || isSubmitting}
                                 className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                             >
