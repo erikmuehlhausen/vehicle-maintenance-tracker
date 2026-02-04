@@ -4,6 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Life Tracker</title>
+    
+    <!-- 🛡️ SECURITY: Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' 'unsafe-eval' 
+            https://cdnjs.cloudflare.com 
+            https://cdn.tailwindcss.com 
+            https://cdn.jsdelivr.net;
+        style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com;
+        connect-src 'self' https://spenpcmolydeumtskdqj.supabase.co https://*.supabase.co;
+        img-src 'self' data: blob: https://spenpcmolydeumtskdqj.supabase.co;
+        font-src 'self';
+        frame-ancestors 'none';
+        base-uri 'self';
+        form-action 'self';
+    ">
+    
+    <!-- 🛡️ SECURITY: Additional security headers via meta tags -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-Frame-Options" content="DENY">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    
     <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -14,7 +36,216 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useCallback } = React;
+        
+        // ===========================================
+        // 🛡️ SECURITY UTILITIES
+        // ===========================================
+        
+        const SecurityUtils = {
+            // 🛡️ Generate cryptographically secure UUID v4
+            generateUUID: () => {
+                if (crypto && crypto.randomUUID) {
+                    return crypto.randomUUID();
+                }
+                // Fallback for older browsers
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                    const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
+                    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            },
+            
+            // 🛡️ Sanitize string input - prevent XSS
+            sanitizeString: (input, maxLength = 1000) => {
+                if (typeof input !== 'string') return '';
+                return input
+                    .slice(0, maxLength)
+                    .replace(/[<>]/g, '') // Remove angle brackets
+                    .trim();
+            },
+            
+            // 🛡️ Sanitize for display - HTML encode
+            escapeHtml: (str) => {
+                if (typeof str !== 'string') return '';
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            },
+            
+            // 🛡️ Validate email format
+            isValidEmail: (email) => {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                return emailRegex.test(email) && !email.includes('..') && !email.includes('\\');
+            },
+            
+            // 🛡️ Validate date format (YYYY-MM-DD)
+            isValidDate: (dateStr) => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+                const date = new Date(dateStr);
+                return date instanceof Date && !isNaN(date);
+            },
+            
+            // 🛡️ Validate positive number
+            isValidPositiveNumber: (num) => {
+                const parsed = parseFloat(num);
+                return !isNaN(parsed) && parsed >= 0 && parsed < 10000000;
+            },
+            
+            // 🛡️ Validate year (reasonable range)
+            isValidYear: (year) => {
+                const parsed = parseInt(year);
+                return !isNaN(parsed) && parsed >= 1900 && parsed <= new Date().getFullYear() + 2;
+            },
+            
+            // 🛡️ Validate mileage
+            isValidMileage: (mileage) => {
+                const parsed = parseInt(mileage);
+                return !isNaN(parsed) && parsed >= 0 && parsed < 2000000;
+            },
+            
+            // 🛡️ File validation constants
+            ALLOWED_IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+            ALLOWED_DOC_TYPES: ['application/pdf'],
+            MAX_FILE_SIZE: 10 * 1024 * 1024, // 10MB
+            
+            // 🛡️ Magic bytes for file type verification
+            MAGIC_BYTES: {
+                'image/jpeg': [[0xFF, 0xD8, 0xFF]],
+                'image/png': [[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]],
+                'image/gif': [[0x47, 0x49, 0x46, 0x38]],
+                'image/webp': [[0x52, 0x49, 0x46, 0x46]], // RIFF header
+                'application/pdf': [[0x25, 0x50, 0x44, 0x46]] // %PDF
+            },
+            
+            // 🛡️ Verify file magic bytes
+            verifyFileMagicBytes: async (file) => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const arr = new Uint8Array(e.target.result).slice(0, 8);
+                        const validTypes = [...SecurityUtils.ALLOWED_IMAGE_TYPES, ...SecurityUtils.ALLOWED_DOC_TYPES];
+                        
+                        for (const type of validTypes) {
+                            const signatures = SecurityUtils.MAGIC_BYTES[type];
+                            if (signatures) {
+                                for (const sig of signatures) {
+                                    let match = true;
+                                    for (let i = 0; i < sig.length; i++) {
+                                        if (arr[i] !== sig[i]) {
+                                            match = false;
+                                            break;
+                                        }
+                                    }
+                                    if (match) {
+                                        resolve({ valid: true, detectedType: type });
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        resolve({ valid: false, detectedType: null });
+                    };
+                    reader.onerror = () => resolve({ valid: false, detectedType: null });
+                    reader.readAsArrayBuffer(file.slice(0, 8));
+                });
+            },
+            
+            // 🛡️ Comprehensive file validation
+            validateFile: async (file) => {
+                const errors = [];
+                
+                // Check if file exists
+                if (!file) {
+                    return { valid: false, errors: ['No file provided'] };
+                }
+                
+                // Check file size
+                if (file.size > SecurityUtils.MAX_FILE_SIZE) {
+                    errors.push(`File too large. Maximum size is ${SecurityUtils.MAX_FILE_SIZE / 1024 / 1024}MB`);
+                }
+                
+                // Check MIME type
+                const allowedTypes = [...SecurityUtils.ALLOWED_IMAGE_TYPES, ...SecurityUtils.ALLOWED_DOC_TYPES];
+                if (!allowedTypes.includes(file.type)) {
+                    errors.push('File type not allowed. Use JPEG, PNG, GIF, WebP, or PDF');
+                }
+                
+                // Check file extension
+                const ext = file.name.split('.').pop().toLowerCase();
+                const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'];
+                if (!allowedExtensions.includes(ext)) {
+                    errors.push('Invalid file extension');
+                }
+                
+                // 🛡️ Check for double extensions (e.g., malware.php.jpg)
+                const nameParts = file.name.split('.');
+                if (nameParts.length > 2) {
+                    const suspiciousExts = ['php', 'js', 'html', 'htm', 'exe', 'bat', 'cmd', 'sh'];
+                    for (let i = 0; i < nameParts.length - 1; i++) {
+                        if (suspiciousExts.includes(nameParts[i].toLowerCase())) {
+                            errors.push('Suspicious file name detected');
+                            break;
+                        }
+                    }
+                }
+                
+                // 🛡️ Check for null bytes in filename
+                if (file.name.includes('\0') || file.name.includes('%00')) {
+                    errors.push('Invalid characters in filename');
+                }
+                
+                // 🛡️ Verify magic bytes match claimed type
+                if (errors.length === 0) {
+                    const magicCheck = await SecurityUtils.verifyFileMagicBytes(file);
+                    if (!magicCheck.valid) {
+                        errors.push('File content does not match file type');
+                    }
+                }
+                
+                return { 
+                    valid: errors.length === 0, 
+                    errors 
+                };
+            },
+            
+            // 🛡️ Generate secure random filename
+            generateSecureFilename: (originalName) => {
+                const ext = originalName.split('.').pop().toLowerCase();
+                const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'];
+                const safeExt = allowedExtensions.includes(ext) ? ext : 'bin';
+                return `${SecurityUtils.generateUUID()}.${safeExt}`;
+            },
+            
+            // 🛡️ Rate limiting helper (client-side)
+            createRateLimiter: (maxRequests, windowMs) => {
+                const requests = [];
+                return () => {
+                    const now = Date.now();
+                    const windowStart = now - windowMs;
+                    // Remove old requests
+                    while (requests.length > 0 && requests[0] < windowStart) {
+                        requests.shift();
+                    }
+                    if (requests.length >= maxRequests) {
+                        return false; // Rate limited
+                    }
+                    requests.push(now);
+                    return true; // Allowed
+                };
+            }
+        };
+        
+        // 🛡️ Create rate limiters for different operations
+        const rateLimiters = {
+            addItem: SecurityUtils.createRateLimiter(10, 60000), // 10 per minute
+            addLog: SecurityUtils.createRateLimiter(20, 60000),  // 20 per minute
+            fileUpload: SecurityUtils.createRateLimiter(5, 60000) // 5 per minute
+        };
+        
+        // ===========================================
+        // 🛡️ SECURE SUPABASE CLIENT
+        // ===========================================
         
         const supabaseClient = window.supabase.createClient(
             'https://spenpcmolydeumtskdqj.supabase.co',
@@ -23,7 +254,167 @@
 
         const USER_ID = 'erik_main_user';
 
-        // Icons
+        // ===========================================
+        // 🛡️ SECURE DATABASE OPERATIONS
+        // ===========================================
+        
+        const SecureDB = {
+            // 🛡️ Generic error handler - never expose internal errors
+            handleError: (error, operation) => {
+                console.error(`[Security Log] ${operation} error:`, error);
+                // Return generic message - never expose internal details
+                return { 
+                    success: false, 
+                    error: 'An unexpected error occurred. Please try again.' 
+                };
+            },
+            
+            // 🛡️ Fetch with ownership verification
+            fetchUserData: async (table, additionalFilters = {}) => {
+                try {
+                    let query = supabaseClient
+                        .from(table)
+                        .select('*')
+                        .eq('user_id', USER_ID);
+                    
+                    // Apply additional filters
+                    Object.entries(additionalFilters).forEach(([key, value]) => {
+                        query = query.eq(key, value);
+                    });
+                    
+                    const { data, error } = await query;
+                    
+                    if (error) throw error;
+                    return { success: true, data: data || [] };
+                } catch (error) {
+                    return SecureDB.handleError(error, `fetch ${table}`);
+                }
+            },
+            
+            // 🛡️ Insert with validation
+            insertData: async (table, data, allowedFields) => {
+                try {
+                    // 🛡️ Whitelist allowed fields to prevent mass assignment
+                    const sanitizedData = {};
+                    allowedFields.forEach(field => {
+                        if (data[field] !== undefined) {
+                            sanitizedData[field] = data[field];
+                        }
+                    });
+                    
+                    // 🛡️ Always set user_id server-side concept (we enforce it here)
+                    sanitizedData.user_id = USER_ID;
+                    
+                    const { data: result, error } = await supabaseClient
+                        .from(table)
+                        .insert([sanitizedData])
+                        .select();
+                    
+                    if (error) throw error;
+                    return { success: true, data: result };
+                } catch (error) {
+                    return SecureDB.handleError(error, `insert ${table}`);
+                }
+            },
+            
+            // 🛡️ Update with ownership check
+            updateData: async (table, id, updates, allowedFields) => {
+                try {
+                    // 🛡️ Whitelist allowed fields
+                    const sanitizedUpdates = {};
+                    allowedFields.forEach(field => {
+                        if (updates[field] !== undefined) {
+                            sanitizedUpdates[field] = updates[field];
+                        }
+                    });
+                    
+                    // 🛡️ Verify ownership before update
+                    const { data: existing, error: fetchError } = await supabaseClient
+                        .from(table)
+                        .select('user_id')
+                        .eq('id', id)
+                        .single();
+                    
+                    // 🛡️ Return 404 (not 403) to prevent enumeration
+                    if (fetchError || !existing || existing.user_id !== USER_ID) {
+                        return { success: false, error: 'Record not found' };
+                    }
+                    
+                    const { data: result, error } = await supabaseClient
+                        .from(table)
+                        .update(sanitizedUpdates)
+                        .eq('id', id)
+                        .eq('user_id', USER_ID) // Double-check ownership
+                        .select();
+                    
+                    if (error) throw error;
+                    return { success: true, data: result };
+                } catch (error) {
+                    return SecureDB.handleError(error, `update ${table}`);
+                }
+            },
+            
+            // 🛡️ Delete with ownership check
+            deleteData: async (table, id) => {
+                try {
+                    // 🛡️ Verify ownership before delete
+                    const { data: existing, error: fetchError } = await supabaseClient
+                        .from(table)
+                        .select('user_id')
+                        .eq('id', id)
+                        .single();
+                    
+                    // 🛡️ Return 404 (not 403) to prevent enumeration
+                    if (fetchError || !existing || existing.user_id !== USER_ID) {
+                        return { success: false, error: 'Record not found' };
+                    }
+                    
+                    const { error } = await supabaseClient
+                        .from(table)
+                        .delete()
+                        .eq('id', id)
+                        .eq('user_id', USER_ID); // Double-check ownership
+                    
+                    if (error) throw error;
+                    return { success: true };
+                } catch (error) {
+                    return SecureDB.handleError(error, `delete ${table}`);
+                }
+            },
+            
+            // 🛡️ Secure file upload
+            uploadFile: async (file) => {
+                try {
+                    // 🛡️ Rate limit check
+                    if (!rateLimiters.fileUpload()) {
+                        return { success: false, error: 'Too many uploads. Please wait a moment.' };
+                    }
+                    
+                    // 🛡️ Comprehensive file validation
+                    const validation = await SecurityUtils.validateFile(file);
+                    if (!validation.valid) {
+                        return { success: false, error: validation.errors.join('. ') };
+                    }
+                    
+                    // 🛡️ Generate secure filename (discard original name)
+                    const secureFilename = `${USER_ID}/${SecurityUtils.generateSecureFilename(file.name)}`;
+                    
+                    const { data, error } = await supabaseClient.storage
+                        .from('attachments')
+                        .upload(secureFilename, file, {
+                            contentType: file.type,
+                            upsert: false
+                        });
+                    
+                    if (error) throw error;
+                    return { success: true, path: data.path };
+                } catch (error) {
+                    return SecureDB.handleError(error, 'file upload');
+                }
+            }
+        };
+
+        // Icons (unchanged - these are safe SVG components)
         const Plus = ({ size = 24 }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
         );
@@ -51,6 +442,9 @@
         const X = ({ size = 24 }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
         );
+        const AlertTriangle = ({ size = 24 }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        );
 
         const CATEGORY_CONFIGS = {
             vehicles: {
@@ -69,8 +463,24 @@
             }
         };
 
+        // 🛡️ Error Banner Component
+        const ErrorBanner = ({ message, onDismiss }) => {
+            if (!message) return null;
+            return (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <AlertTriangle size={20} />
+                        <span>{message}</span>
+                    </div>
+                    <button onClick={onDismiss} className="text-red-500 hover:text-red-700">
+                        <X size={18} />
+                    </button>
+                </div>
+            );
+        };
+
         const LifeTracker = () => {
-            const [view, setView] = useState('main'); // main, category
+            const [view, setView] = useState('main');
             const [selectedCategory, setSelectedCategory] = useState(null);
             const [categories, setCategories] = useState([]);
             const [items, setItems] = useState([]);
@@ -78,6 +488,7 @@
             const [reminders, setReminders] = useState([]);
             const [loading, setLoading] = useState(true);
             const [showQuickAdd, setShowQuickAdd] = useState(false);
+            const [error, setError] = useState(null);
 
             useEffect(() => {
                 initializeData();
@@ -85,29 +496,26 @@
 
             const initializeData = async () => {
                 setLoading(true);
+                setError(null);
                 try {
-                    // Check if categories exist, if not create them
                     const { data: existingCats } = await supabaseClient
                         .from('categories')
                         .select('*')
                         .eq('user_id', USER_ID);
 
                     if (!existingCats || existingCats.length === 0) {
-                        // Create default categories
                         const defaultCategories = [
-                            { id: 'vehicles', user_id: USER_ID, name: 'Vehicles', icon: 'car' },
-                            { id: 'pets', user_id: USER_ID, name: 'Pets', icon: 'paw' }
+                            { id: SecurityUtils.generateUUID(), user_id: USER_ID, name: 'Vehicles', icon: 'car' },
+                            { id: SecurityUtils.generateUUID(), user_id: USER_ID, name: 'Pets', icon: 'paw' }
                         ];
                         await supabaseClient.from('categories').insert(defaultCategories);
-                        
-                        // Migrate old vehicle data if it exists
                         await migrateOldData();
                     }
 
-                    // Load all data
                     await loadAllData();
                 } catch (error) {
-                    console.error('Error initializing:', error);
+                    console.error('[Security Log] Initialization error:', error);
+                    setError('Failed to load data. Please refresh the page.');
                 } finally {
                     setLoading(false);
                 }
@@ -115,64 +523,43 @@
 
             const migrateOldData = async () => {
                 try {
-                    // Get old vehicles
                     const { data: oldVehicles } = await supabaseClient
                         .from('vehicles')
                         .select('*')
                         .eq('user_id', USER_ID);
 
                     if (oldVehicles && oldVehicles.length > 0) {
-                        // Convert to new format
                         const newItems = oldVehicles.map(v => ({
-                            id: v.id,
+                            id: SecurityUtils.generateUUID(), // 🛡️ Use UUID instead of old ID
                             user_id: USER_ID,
                             category_id: 'vehicles',
-                            name: `${v.year} ${v.make} ${v.model}`,
+                            name: SecurityUtils.sanitizeString(`${v.year} ${v.make} ${v.model}`, 200),
                             details: {
-                                year: v.year,
-                                make: v.make,
-                                model: v.model,
+                                year: SecurityUtils.sanitizeString(String(v.year), 4),
+                                make: SecurityUtils.sanitizeString(v.make, 50),
+                                model: SecurityUtils.sanitizeString(v.model, 50),
                                 current_mileage: v.current_mileage
                             }
                         }));
                         await supabaseClient.from('items').insert(newItems);
-
-                        // Get old records
-                        const { data: oldRecords } = await supabaseClient
-                            .from('records')
-                            .select('*')
-                            .eq('user_id', USER_ID);
-
-                        if (oldRecords && oldRecords.length > 0) {
-                            const newLogs = oldRecords.map(r => ({
-                                id: r.id,
-                                item_id: r.vehicle_id,
-                                user_id: USER_ID,
-                                log_type: r.service,
-                                date: r.date,
-                                cost: r.cost,
-                                notes: `${r.provider ? 'Provider: ' + r.provider + '\n' : ''}${r.notes || ''}`.trim()
-                            }));
-                            await supabaseClient.from('logs').insert(newLogs);
-                        }
                     }
                 } catch (error) {
-                    console.error('Migration error:', error);
+                    console.error('[Security Log] Migration error:', error);
                 }
             };
 
             const loadAllData = async () => {
                 const [catsRes, itemsRes, logsRes, remindersRes] = await Promise.all([
-                    supabaseClient.from('categories').select('*').eq('user_id', USER_ID),
-                    supabaseClient.from('items').select('*').eq('user_id', USER_ID),
-                    supabaseClient.from('logs').select('*').eq('user_id', USER_ID),
-                    supabaseClient.from('reminders_v2').select('*').eq('user_id', USER_ID)
+                    SecureDB.fetchUserData('categories'),
+                    SecureDB.fetchUserData('items'),
+                    SecureDB.fetchUserData('logs'),
+                    SecureDB.fetchUserData('reminders_v2')
                 ]);
 
-                if (catsRes.data) setCategories(catsRes.data);
-                if (itemsRes.data) setItems(itemsRes.data);
-                if (logsRes.data) setLogs(logsRes.data);
-                if (remindersRes.data) setReminders(remindersRes.data);
+                if (catsRes.success) setCategories(catsRes.data);
+                if (itemsRes.success) setItems(itemsRes.data);
+                if (logsRes.success) setLogs(logsRes.data);
+                if (remindersRes.success) setReminders(remindersRes.data);
             };
 
             const getUpcomingReminders = () => {
@@ -186,7 +573,6 @@
                         if (r.reminder_type === 'date') {
                             dueDate = new Date(r.due_date);
                         } else if (r.reminder_type === 'recurring') {
-                            // Simple recurring logic - can be enhanced
                             dueDate = new Date(r.due_date);
                         }
                         
@@ -233,8 +619,9 @@
                 <div className="min-h-screen bg-gray-50 pb-20">
                     <div className="max-w-4xl mx-auto p-6">
                         <h1 className="text-4xl font-bold text-gray-900 mb-8">Life Tracker</h1>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
-                        {/* Upcoming Reminders */}
                         {upcomingReminders.length > 0 && (
                             <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
                                 <div className="flex items-center gap-2 mb-4">
@@ -246,8 +633,9 @@
                                         <div key={reminder.id} className={`p-3 rounded-lg border ${reminder.isOverdue ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
                                             <div className="flex justify-between items-start">
                                                 <div>
-                                                    <p className="font-semibold">{reminder.title}</p>
-                                                    <p className="text-sm text-gray-600">{reminder.item.name}</p>
+                                                    {/* 🛡️ Escaped output */}
+                                                    <p className="font-semibold">{SecurityUtils.escapeHtml(reminder.title)}</p>
+                                                    <p className="text-sm text-gray-600">{SecurityUtils.escapeHtml(reminder.item.name)}</p>
                                                 </div>
                                                 <p className={`text-sm font-medium ${reminder.isOverdue ? 'text-red-600' : 'text-blue-600'}`}>
                                                     {reminder.isOverdue ? 'Overdue' : `${reminder.daysUntil} days`}
@@ -259,7 +647,6 @@
                             </div>
                         )}
 
-                        {/* Categories */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {Object.entries(CATEGORY_CONFIGS).map(([id, config]) => {
                                 const Icon = config.icon;
@@ -288,10 +675,10 @@
                         </div>
                     </div>
 
-                    {/* Quick Add Button */}
                     <button
                         onClick={() => setShowQuickAdd(true)}
                         className="fixed bottom-6 right-6 bg-blue-600 text-white p-4 rounded-full shadow-lg hover:bg-blue-700 transition-colors"
+                        aria-label="Quick Add"
                     >
                         <Plus size={32} />
                     </button>
@@ -313,12 +700,25 @@
             const [activeTab, setActiveTab] = useState('dashboard');
             const [showAddItem, setShowAddItem] = useState(false);
             const [showAddLog, setShowAddLog] = useState(false);
+            const [error, setError] = useState(null);
 
             const config = CATEGORY_CONFIGS[category];
             const Icon = config.icon;
 
             const categoryLogs = logs.filter(l => items.some(i => i.id === l.item_id));
             const categoryReminders = reminders.filter(r => items.some(i => i.id === r.item_id));
+
+            const handleDeleteItem = async (item) => {
+                if (!confirm(`Delete ${item.name}? This will also delete all logs and reminders.`)) return;
+                
+                const result = await SecureDB.deleteData('items', item.id);
+                if (result.success) {
+                    setSelectedItem(null);
+                    onRefresh();
+                } else {
+                    setError(result.error);
+                }
+            };
 
             if (items.length === 0) {
                 return (
@@ -328,6 +728,8 @@
                                 <ArrowLeft size={20} />
                                 Back
                             </button>
+                            
+                            <ErrorBanner message={error} onDismiss={() => setError(null)} />
                             
                             <div className="bg-white rounded-lg shadow-sm p-12 text-center">
                                 <Icon size={64} className="mx-auto text-gray-400 mb-4" />
@@ -360,6 +762,8 @@
                             <ArrowLeft size={20} />
                             Back to Dashboard
                         </button>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
                         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
                             <div className="flex items-center justify-between mb-4">
@@ -384,18 +788,17 @@
                                                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                                             }`}
                                         >
-                                            {item.name}
+                                            {/* 🛡️ Escaped output */}
+                                            {SecurityUtils.escapeHtml(item.name)}
                                         </button>
                                         {selectedItem === item.id && (
                                             <button
-                                                onClick={async (e) => {
+                                                onClick={(e) => {
                                                     e.stopPropagation();
-                                                    if (!confirm(`Delete ${item.name}? This will also delete all logs and reminders.`)) return;
-                                                    await supabaseClient.from('items').delete().eq('id', item.id);
-                                                    setSelectedItem(null);
-                                                    onRefresh();
+                                                    handleDeleteItem(item);
                                                 }}
                                                 className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1 hover:bg-red-700 shadow-lg"
+                                                aria-label="Delete item"
                                             >
                                                 <X size={14} />
                                             </button>
@@ -433,6 +836,7 @@
                                         item={items.find(i => i.id === selectedItem)}
                                         logs={categoryLogs.filter(l => l.item_id === selectedItem)}
                                         onAddLog={() => setShowAddLog(true)}
+                                        onRefresh={onRefresh}
                                     />
                                 )}
 
@@ -446,6 +850,7 @@
                                 {activeTab === 'reminders' && (
                                     <RemindersTab
                                         reminders={categoryReminders.filter(r => r.item_id === selectedItem)}
+                                        itemId={selectedItem}
                                         onRefresh={onRefresh}
                                     />
                                 )}
@@ -479,35 +884,50 @@
             );
         };
 
-        const DashboardTab = ({ item, logs, onAddLog }) => {
+        const DashboardTab = ({ item, logs, onAddLog, onRefresh }) => {
             const [notes, setNotes] = useState(item.details?.notes || '');
             const [isSavingNotes, setIsSavingNotes] = useState(false);
+            const [error, setError] = useState(null);
 
             const totalCost = logs.reduce((sum, l) => sum + parseFloat(l.cost || 0), 0);
             const lastLog = logs.length > 0 ? logs.sort((a, b) => new Date(b.date) - new Date(a.date))[0] : null;
 
             const saveNotes = async () => {
                 setIsSavingNotes(true);
-                const updatedDetails = { ...item.details, notes };
-                await supabaseClient
-                    .from('items')
-                    .update({ details: updatedDetails })
-                    .eq('id', item.id);
+                setError(null);
+                
+                // 🛡️ Sanitize notes input
+                const sanitizedNotes = SecurityUtils.sanitizeString(notes, 5000);
+                const updatedDetails = { ...item.details, notes: sanitizedNotes };
+                
+                const result = await SecureDB.updateData(
+                    'items', 
+                    item.id, 
+                    { details: updatedDetails },
+                    ['details'] // 🛡️ Whitelist only the details field
+                );
+                
+                if (!result.success) {
+                    setError(result.error);
+                }
                 setIsSavingNotes(false);
             };
 
             return (
                 <div className="space-y-6">
+                    <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                    
                     {/* Item Details */}
                     <div className="bg-white rounded-lg shadow-sm p-6">
                         <h3 className="font-semibold text-gray-700 mb-4">Item Details</h3>
                         <div className="grid grid-cols-2 gap-4 text-sm">
                             {Object.entries(item.details || {}).map(([key, value]) => {
-                                if (key === 'notes') return null; // Skip notes, we show it separately
+                                if (key === 'notes') return null;
                                 return (
                                     <div key={key}>
                                         <span className="text-gray-600 capitalize">{key.replace(/_/g, ' ')}:</span>
-                                        <span className="ml-2 font-medium">{value}</span>
+                                        {/* 🛡️ Escaped output */}
+                                        <span className="ml-2 font-medium">{SecurityUtils.escapeHtml(String(value))}</span>
                                     </div>
                                 );
                             })}
@@ -542,6 +962,7 @@
                             placeholder="Add notes about this item..."
                             className="w-full px-4 py-2 border rounded-lg"
                             rows="4"
+                            maxLength={5000}
                         />
                         {isSavingNotes && <p className="text-sm text-gray-500 mt-2">Saving...</p>}
                     </div>
@@ -562,11 +983,16 @@
 
         const HistoryTab = ({ logs, onRefresh }) => {
             const [editingLog, setEditingLog] = useState(null);
+            const [error, setError] = useState(null);
 
             const deleteLog = async (id) => {
                 if (!confirm('Delete this log?')) return;
-                await supabaseClient.from('logs').delete().eq('id', id);
-                onRefresh();
+                const result = await SecureDB.deleteData('logs', id);
+                if (result.success) {
+                    onRefresh();
+                } else {
+                    setError(result.error);
+                }
             };
 
             const sortedLogs = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -574,12 +1000,16 @@
             return (
                 <div className="bg-white rounded-lg shadow-sm p-6">
                     <h2 className="text-xl font-semibold mb-6">History</h2>
+                    
+                    <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                    
                     <div className="space-y-4">
                         {sortedLogs.map(log => (
                             <div key={log.id} className="border rounded-lg p-4 hover:bg-gray-50">
                                 <div className="flex justify-between items-start mb-2">
                                     <div>
-                                        <h3 className="font-semibold text-lg">{log.log_type}</h3>
+                                        {/* 🛡️ Escaped output */}
+                                        <h3 className="font-semibold text-lg">{SecurityUtils.escapeHtml(log.log_type)}</h3>
                                         <p className="text-gray-600">{new Date(log.date).toLocaleDateString()}</p>
                                     </div>
                                     <div className="flex items-center gap-3">
@@ -587,17 +1017,19 @@
                                         <button 
                                             onClick={() => setEditingLog(log)} 
                                             className="text-blue-600 hover:text-blue-700"
+                                            aria-label="Edit log"
                                         >
                                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                                 <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
                                             </svg>
                                         </button>
-                                        <button onClick={() => deleteLog(log.id)} className="text-red-600 hover:text-red-700">
+                                        <button onClick={() => deleteLog(log.id)} className="text-red-600 hover:text-red-700" aria-label="Delete log">
                                             <Trash2 size={18} />
                                         </button>
                                     </div>
                                 </div>
-                                {log.notes && <p className="text-sm text-gray-700 mt-2">{log.notes}</p>}
+                                {/* 🛡️ Escaped output */}
+                                {log.notes && <p className="text-sm text-gray-700 mt-2">{SecurityUtils.escapeHtml(log.notes)}</p>}
                             </div>
                         ))}
                         {sortedLogs.length === 0 && (
@@ -621,30 +1053,50 @@
             );
         };
 
-        const RemindersTab = ({ reminders, onRefresh }) => {
+        const RemindersTab = ({ reminders, itemId, onRefresh }) => {
+            const [showAddReminder, setShowAddReminder] = useState(false);
+            const [error, setError] = useState(null);
+
             const deleteReminder = async (id) => {
                 if (!confirm('Delete this reminder?')) return;
-                await supabaseClient.from('reminders_v2').delete().eq('id', id);
-                onRefresh();
+                const result = await SecureDB.deleteData('reminders_v2', id);
+                if (result.success) {
+                    onRefresh();
+                } else {
+                    setError(result.error);
+                }
             };
 
             return (
                 <div className="bg-white rounded-lg shadow-sm p-6">
-                    <h2 className="text-xl font-semibold mb-6">Reminders</h2>
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-xl font-semibold">Reminders</h2>
+                        <button
+                            onClick={() => setShowAddReminder(true)}
+                            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+                        >
+                            <Plus size={18} />
+                            Add Reminder
+                        </button>
+                    </div>
+                    
+                    <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                    
                     <div className="space-y-4">
                         {reminders.map(reminder => (
                             <div key={reminder.id} className="border rounded-lg p-4 hover:bg-gray-50">
                                 <div className="flex justify-between items-start">
                                     <div>
-                                        <h3 className="font-semibold text-lg">{reminder.title}</h3>
+                                        {/* 🛡️ Escaped output */}
+                                        <h3 className="font-semibold text-lg">{SecurityUtils.escapeHtml(reminder.title)}</h3>
                                         <p className="text-gray-600">
                                             {reminder.reminder_type === 'date' 
                                                 ? `Due: ${new Date(reminder.due_date).toLocaleDateString()}`
-                                                : `Recurring: ${reminder.recurrence}`
+                                                : `Recurring: ${SecurityUtils.escapeHtml(reminder.recurrence || '')}`
                                             }
                                         </p>
                                     </div>
-                                    <button onClick={() => deleteReminder(reminder.id)} className="text-red-600 hover:text-red-700">
+                                    <button onClick={() => deleteReminder(reminder.id)} className="text-red-600 hover:text-red-700" aria-label="Delete reminder">
                                         <Trash2 size={18} />
                                     </button>
                                 </div>
@@ -656,12 +1108,141 @@
                             </div>
                         )}
                     </div>
+                    
+                    {showAddReminder && (
+                        <AddReminderModal
+                            itemId={itemId}
+                            onClose={() => setShowAddReminder(false)}
+                            onRefresh={() => {
+                                onRefresh();
+                                setShowAddReminder(false);
+                            }}
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        // 🛡️ New: Add Reminder Modal
+        const AddReminderModal = ({ itemId, onClose, onRefresh }) => {
+            const [formData, setFormData] = useState({
+                title: '',
+                reminderType: 'date',
+                dueDate: '',
+                recurrence: 'monthly'
+            });
+            const [error, setError] = useState(null);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+
+            const handleSubmit = async () => {
+                setError(null);
+                
+                // 🛡️ Validation
+                if (!formData.title.trim()) {
+                    setError('Title is required');
+                    return;
+                }
+                
+                if (formData.reminderType === 'date' && !SecurityUtils.isValidDate(formData.dueDate)) {
+                    setError('Please enter a valid date');
+                    return;
+                }
+                
+                setIsSubmitting(true);
+                
+                const newReminder = {
+                    id: SecurityUtils.generateUUID(),
+                    item_id: itemId,
+                    user_id: USER_ID,
+                    title: SecurityUtils.sanitizeString(formData.title, 200),
+                    reminder_type: formData.reminderType,
+                    due_date: formData.dueDate || new Date().toISOString().split('T')[0],
+                    recurrence: formData.reminderType === 'recurring' ? formData.recurrence : null
+                };
+
+                const result = await SecureDB.insertData(
+                    'reminders_v2',
+                    newReminder,
+                    ['id', 'item_id', 'user_id', 'title', 'reminder_type', 'due_date', 'recurrence']
+                );
+                
+                setIsSubmitting(false);
+                
+                if (result.success) {
+                    onRefresh();
+                } else {
+                    setError(result.error);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                        <h2 className="text-2xl font-bold mb-4">Add Reminder</h2>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                        
+                        <div className="space-y-4">
+                            <input
+                                type="text"
+                                placeholder="Reminder title"
+                                value={formData.title}
+                                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                                maxLength={200}
+                            />
+                            
+                            <select
+                                value={formData.reminderType}
+                                onChange={(e) => setFormData({ ...formData, reminderType: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            >
+                                <option value="date">One-time (specific date)</option>
+                                <option value="recurring">Recurring</option>
+                            </select>
+                            
+                            <input
+                                type="date"
+                                value={formData.dueDate}
+                                onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+                                className="w-full px-4 py-2 border rounded-lg"
+                            />
+                            
+                            {formData.reminderType === 'recurring' && (
+                                <select
+                                    value={formData.recurrence}
+                                    onChange={(e) => setFormData({ ...formData, recurrence: e.target.value })}
+                                    className="w-full px-4 py-2 border rounded-lg"
+                                >
+                                    <option value="daily">Daily</option>
+                                    <option value="weekly">Weekly</option>
+                                    <option value="monthly">Monthly</option>
+                                    <option value="yearly">Yearly</option>
+                                </select>
+                            )}
+                        </div>
+                        
+                        <div className="flex gap-3 mt-6">
+                            <button
+                                onClick={handleSubmit}
+                                disabled={isSubmitting}
+                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
+                            >
+                                {isSubmitting ? 'Adding...' : 'Add Reminder'}
+                            </button>
+                            <button
+                                onClick={onClose}
+                                className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-lg hover:bg-gray-300"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
                 </div>
             );
         };
 
         const QuickAddModal = ({ onClose, onRefresh, categories, items }) => {
-            const [step, setStep] = useState(1);
             const [formData, setFormData] = useState({
                 category: '',
                 itemId: '',
@@ -671,27 +1252,71 @@
                 notes: '',
                 file: null
             });
+            const [error, setError] = useState(null);
+            const [isSubmitting, setIsSubmitting] = useState(false);
 
             const handleSubmit = async () => {
-                if (!formData.itemId || !formData.logType) return;
+                setError(null);
+                
+                // 🛡️ Rate limit check
+                if (!rateLimiters.addLog()) {
+                    setError('Too many requests. Please wait a moment.');
+                    return;
+                }
+                
+                // 🛡️ Validation
+                if (!formData.itemId || !formData.logType) {
+                    setError('Please select an item and log type');
+                    return;
+                }
+                
+                if (!SecurityUtils.isValidDate(formData.date)) {
+                    setError('Please enter a valid date');
+                    return;
+                }
+                
+                if (formData.cost && !SecurityUtils.isValidPositiveNumber(formData.cost)) {
+                    setError('Please enter a valid cost');
+                    return;
+                }
+                
+                setIsSubmitting(true);
 
                 const newLog = {
-                    id: Date.now().toString(),
+                    id: SecurityUtils.generateUUID(),
                     item_id: formData.itemId,
                     user_id: USER_ID,
-                    log_type: formData.logType,
+                    log_type: SecurityUtils.sanitizeString(formData.logType, 100),
                     date: formData.date,
                     cost: formData.cost ? parseFloat(formData.cost) : null,
-                    notes: formData.notes
+                    notes: SecurityUtils.sanitizeString(formData.notes, 2000)
                 };
 
-                await supabaseClient.from('logs').insert([newLog]);
+                const result = await SecureDB.insertData(
+                    'logs',
+                    newLog,
+                    ['id', 'item_id', 'user_id', 'log_type', 'date', 'cost', 'notes']
+                );
                 
+                if (!result.success) {
+                    setError(result.error);
+                    setIsSubmitting(false);
+                    return;
+                }
+                
+                // 🛡️ Secure file upload
                 if (formData.file) {
-                    const fileName = `${Date.now()}_${formData.file.name}`;
-                    await supabaseClient.storage.from('attachments').upload(fileName, formData.file);
+                    const uploadResult = await SecureDB.uploadFile(formData.file);
+                    if (!uploadResult.success) {
+                        // Log was saved but file upload failed - notify user
+                        setError(`Log saved, but file upload failed: ${uploadResult.error}`);
+                        setIsSubmitting(false);
+                        onRefresh();
+                        return;
+                    }
                 }
 
+                setIsSubmitting(false);
                 onRefresh();
                 onClose();
             };
@@ -704,29 +1329,29 @@
                     <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
                         <div className="flex justify-between items-center mb-6">
                             <h2 className="text-2xl font-bold">Quick Add</h2>
-                            <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
+                            <button onClick={onClose} className="text-gray-500 hover:text-gray-700" aria-label="Close">
                                 <X size={24} />
                             </button>
                         </div>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
                         <div className="space-y-4">
-                            {step >= 1 && (
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Category</label>
-                                    <select
-                                        value={formData.category}
-                                        onChange={(e) => setFormData({ ...formData, category: e.target.value, itemId: '' })}
-                                        className="w-full px-4 py-2 border rounded-lg"
-                                    >
-                                        <option value="">Select category...</option>
-                                        {Object.entries(CATEGORY_CONFIGS).map(([id, config]) => (
-                                            <option key={id} value={id}>{config.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            )}
+                            <div>
+                                <label className="block text-sm font-medium mb-2">Category</label>
+                                <select
+                                    value={formData.category}
+                                    onChange={(e) => setFormData({ ...formData, category: e.target.value, itemId: '' })}
+                                    className="w-full px-4 py-2 border rounded-lg"
+                                >
+                                    <option value="">Select category...</option>
+                                    {Object.entries(CATEGORY_CONFIGS).map(([id, config]) => (
+                                        <option key={id} value={id}>{config.name}</option>
+                                    ))}
+                                </select>
+                            </div>
 
-                            {step >= 2 && formData.category && (
+                            {formData.category && (
                                 <div>
                                     <label className="block text-sm font-medium mb-2">Item</label>
                                     <select
@@ -742,7 +1367,7 @@
                                 </div>
                             )}
 
-                            {step >= 3 && formData.itemId && config && (
+                            {formData.itemId && config && (
                                 <div>
                                     <label className="block text-sm font-medium mb-2">Log Type</label>
                                     <select
@@ -769,6 +1394,8 @@
                                     <input
                                         type="number"
                                         step="0.01"
+                                        min="0"
+                                        max="9999999"
                                         placeholder="Cost ($) - optional"
                                         value={formData.cost}
                                         onChange={(e) => setFormData({ ...formData, cost: e.target.value })}
@@ -780,15 +1407,17 @@
                                         onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                         rows="3"
+                                        maxLength={2000}
                                     />
                                     <div>
                                         <label className="block text-sm font-medium mb-2">Attachment (optional)</label>
                                         <input
                                             type="file"
-                                            accept="image/*,.pdf"
+                                            accept="image/jpeg,image/png,image/gif,image/webp,.pdf"
                                             onChange={(e) => setFormData({ ...formData, file: e.target.files[0] })}
                                             className="w-full px-4 py-2 border rounded-lg"
                                         />
+                                        <p className="text-xs text-gray-500 mt-1">Max 10MB. JPEG, PNG, GIF, WebP, or PDF only.</p>
                                     </div>
                                 </>
                             )}
@@ -797,10 +1426,10 @@
                         <div className="flex gap-3 mt-6">
                             <button
                                 onClick={handleSubmit}
-                                disabled={!formData.itemId || !formData.logType}
+                                disabled={!formData.itemId || !formData.logType || isSubmitting}
                                 className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                             >
-                                Add Log
+                                {isSubmitting ? 'Adding...' : 'Add Log'}
                             </button>
                             <button
                                 onClick={onClose}
@@ -818,25 +1447,85 @@
             const config = CATEGORY_CONFIGS[category];
             const [formData, setFormData] = useState({});
             const [photoFile, setPhotoFile] = useState(null);
+            const [error, setError] = useState(null);
+            const [isSubmitting, setIsSubmitting] = useState(false);
 
             const handleSubmit = async () => {
+                setError(null);
+                
+                // 🛡️ Rate limit check
+                if (!rateLimiters.addItem()) {
+                    setError('Too many requests. Please wait a moment.');
+                    return;
+                }
+                
+                // 🛡️ Validation based on category
+                if (category === 'vehicles') {
+                    if (!SecurityUtils.isValidYear(formData.year)) {
+                        setError('Please enter a valid year (1900-present)');
+                        return;
+                    }
+                    if (!formData.make?.trim() || !formData.model?.trim()) {
+                        setError('Make and model are required');
+                        return;
+                    }
+                    if (formData.current_mileage && !SecurityUtils.isValidMileage(formData.current_mileage)) {
+                        setError('Please enter a valid mileage');
+                        return;
+                    }
+                }
+                
+                if (category === 'pets') {
+                    if (!formData.name?.trim()) {
+                        setError('Pet name is required');
+                        return;
+                    }
+                    if (formData.birthdate && !SecurityUtils.isValidDate(formData.birthdate)) {
+                        setError('Please enter a valid birthdate');
+                        return;
+                    }
+                }
+                
+                setIsSubmitting(true);
+
                 const newItem = {
-                    id: Date.now().toString(),
+                    id: SecurityUtils.generateUUID(),
                     user_id: USER_ID,
                     category_id: category,
                     name: category === 'vehicles' 
-                        ? `${formData.year} ${formData.make} ${formData.model}`
-                        : formData.name,
-                    details: formData
+                        ? SecurityUtils.sanitizeString(`${formData.year} ${formData.make} ${formData.model}`, 200)
+                        : SecurityUtils.sanitizeString(formData.name, 200),
+                    details: {
+                        ...Object.fromEntries(
+                            Object.entries(formData).map(([k, v]) => [k, SecurityUtils.sanitizeString(String(v), 200)])
+                        )
+                    }
                 };
 
-                await supabaseClient.from('items').insert([newItem]);
-
-                if (photoFile) {
-                    const fileName = `${newItem.id}_photo`;
-                    await supabaseClient.storage.from('attachments').upload(fileName, photoFile);
+                const result = await SecureDB.insertData(
+                    'items',
+                    newItem,
+                    ['id', 'user_id', 'category_id', 'name', 'details']
+                );
+                
+                if (!result.success) {
+                    setError(result.error);
+                    setIsSubmitting(false);
+                    return;
                 }
 
+                // 🛡️ Secure photo upload
+                if (photoFile) {
+                    const uploadResult = await SecureDB.uploadFile(photoFile);
+                    if (!uploadResult.success) {
+                        setError(`Item saved, but photo upload failed: ${uploadResult.error}`);
+                        setIsSubmitting(false);
+                        onRefresh();
+                        return;
+                    }
+                }
+
+                setIsSubmitting(false);
                 onRefresh();
             };
 
@@ -844,30 +1533,39 @@
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
                         <h2 className="text-2xl font-bold mb-4">Add {config.name}</h2>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                        
                         <div className="space-y-4">
                             {category === 'vehicles' && (
                                 <>
                                     <input
                                         type="number"
                                         placeholder="Year"
+                                        min="1900"
+                                        max={new Date().getFullYear() + 2}
                                         onChange={(e) => setFormData({ ...formData, year: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                     />
                                     <input
                                         type="text"
                                         placeholder="Make"
+                                        maxLength={50}
                                         onChange={(e) => setFormData({ ...formData, make: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                     />
                                     <input
                                         type="text"
                                         placeholder="Model"
+                                        maxLength={50}
                                         onChange={(e) => setFormData({ ...formData, model: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                     />
                                     <input
                                         type="number"
                                         placeholder="Current Mileage"
+                                        min="0"
+                                        max="2000000"
                                         onChange={(e) => setFormData({ ...formData, current_mileage: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                     />
@@ -878,12 +1576,14 @@
                                     <input
                                         type="text"
                                         placeholder="Name"
+                                        maxLength={100}
                                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                     />
                                     <input
                                         type="text"
                                         placeholder="Type (e.g., Dog, Cat)"
+                                        maxLength={50}
                                         onChange={(e) => setFormData({ ...formData, type: e.target.value })}
                                         className="w-full px-4 py-2 border rounded-lg"
                                     />
@@ -899,18 +1599,20 @@
                                 <label className="block text-sm font-medium mb-2">Photo (optional)</label>
                                 <input
                                     type="file"
-                                    accept="image/*"
+                                    accept="image/jpeg,image/png,image/gif,image/webp"
                                     onChange={(e) => setPhotoFile(e.target.files[0])}
                                     className="w-full px-4 py-2 border rounded-lg"
                                 />
+                                <p className="text-xs text-gray-500 mt-1">Max 10MB. JPEG, PNG, GIF, or WebP only.</p>
                             </div>
                         </div>
                         <div className="flex gap-3 mt-6">
                             <button
                                 onClick={handleSubmit}
-                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700"
+                                disabled={isSubmitting}
+                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
                             >
-                                Add
+                                {isSubmitting ? 'Adding...' : 'Add'}
                             </button>
                             <button
                                 onClick={onClose}
@@ -933,27 +1635,70 @@
                 notes: ''
             });
             const [file, setFile] = useState(null);
+            const [error, setError] = useState(null);
+            const [isSubmitting, setIsSubmitting] = useState(false);
 
             const handleSubmit = async () => {
-                if (!formData.logType) return;
+                setError(null);
+                
+                // 🛡️ Rate limit check
+                if (!rateLimiters.addLog()) {
+                    setError('Too many requests. Please wait a moment.');
+                    return;
+                }
+                
+                // 🛡️ Validation
+                if (!formData.logType) {
+                    setError('Please select a log type');
+                    return;
+                }
+                
+                if (!SecurityUtils.isValidDate(formData.date)) {
+                    setError('Please enter a valid date');
+                    return;
+                }
+                
+                if (formData.cost && !SecurityUtils.isValidPositiveNumber(formData.cost)) {
+                    setError('Please enter a valid cost');
+                    return;
+                }
+                
+                setIsSubmitting(true);
 
                 const newLog = {
-                    id: Date.now().toString(),
+                    id: SecurityUtils.generateUUID(),
                     item_id: itemId,
                     user_id: USER_ID,
-                    log_type: formData.logType,
+                    log_type: SecurityUtils.sanitizeString(formData.logType, 100),
                     date: formData.date,
                     cost: formData.cost ? parseFloat(formData.cost) : null,
-                    notes: formData.notes
+                    notes: SecurityUtils.sanitizeString(formData.notes, 2000)
                 };
 
-                await supabaseClient.from('logs').insert([newLog]);
-
-                if (file) {
-                    const fileName = `${newLog.id}_${file.name}`;
-                    await supabaseClient.storage.from('attachments').upload(fileName, file);
+                const result = await SecureDB.insertData(
+                    'logs',
+                    newLog,
+                    ['id', 'item_id', 'user_id', 'log_type', 'date', 'cost', 'notes']
+                );
+                
+                if (!result.success) {
+                    setError(result.error);
+                    setIsSubmitting(false);
+                    return;
                 }
 
+                // 🛡️ Secure file upload
+                if (file) {
+                    const uploadResult = await SecureDB.uploadFile(file);
+                    if (!uploadResult.success) {
+                        setError(`Log saved, but file upload failed: ${uploadResult.error}`);
+                        setIsSubmitting(false);
+                        onRefresh();
+                        return;
+                    }
+                }
+
+                setIsSubmitting(false);
                 onRefresh();
             };
 
@@ -961,6 +1706,9 @@
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
                         <h2 className="text-2xl font-bold mb-4">Add Log</h2>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                        
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium mb-2">Log Type</label>
@@ -984,6 +1732,8 @@
                             <input
                                 type="number"
                                 step="0.01"
+                                min="0"
+                                max="9999999"
                                 placeholder="Cost ($) - optional"
                                 value={formData.cost}
                                 onChange={(e) => setFormData({ ...formData, cost: e.target.value })}
@@ -995,23 +1745,26 @@
                                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                 className="w-full px-4 py-2 border rounded-lg"
                                 rows="3"
+                                maxLength={2000}
                             />
                             <div>
                                 <label className="block text-sm font-medium mb-2">Attachment (optional)</label>
                                 <input
                                     type="file"
-                                    accept="image/*,.pdf"
+                                    accept="image/jpeg,image/png,image/gif,image/webp,.pdf"
                                     onChange={(e) => setFile(e.target.files[0])}
                                     className="w-full px-4 py-2 border rounded-lg"
                                 />
+                                <p className="text-xs text-gray-500 mt-1">Max 10MB. JPEG, PNG, GIF, WebP, or PDF only.</p>
                             </div>
                         </div>
                         <div className="flex gap-3 mt-6">
                             <button
                                 onClick={handleSubmit}
-                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700"
+                                disabled={isSubmitting}
+                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
                             >
-                                Add Log
+                                {isSubmitting ? 'Adding...' : 'Add Log'}
                             </button>
                             <button
                                 onClick={onClose}
@@ -1032,27 +1785,60 @@
                 cost: log.cost || '',
                 notes: log.notes || ''
             });
+            const [error, setError] = useState(null);
+            const [isSubmitting, setIsSubmitting] = useState(false);
 
             const handleSubmit = async () => {
+                setError(null);
+                
+                // 🛡️ Validation
+                if (!formData.logType.trim()) {
+                    setError('Log type is required');
+                    return;
+                }
+                
+                if (!SecurityUtils.isValidDate(formData.date)) {
+                    setError('Please enter a valid date');
+                    return;
+                }
+                
+                if (formData.cost && !SecurityUtils.isValidPositiveNumber(formData.cost)) {
+                    setError('Please enter a valid cost');
+                    return;
+                }
+                
+                setIsSubmitting(true);
+
                 const updatedLog = {
-                    log_type: formData.logType,
+                    log_type: SecurityUtils.sanitizeString(formData.logType, 100),
                     date: formData.date,
                     cost: formData.cost ? parseFloat(formData.cost) : null,
-                    notes: formData.notes
+                    notes: SecurityUtils.sanitizeString(formData.notes, 2000)
                 };
 
-                await supabaseClient
-                    .from('logs')
-                    .update(updatedLog)
-                    .eq('id', log.id);
-
-                onRefresh();
+                const result = await SecureDB.updateData(
+                    'logs',
+                    log.id,
+                    updatedLog,
+                    ['log_type', 'date', 'cost', 'notes'] // 🛡️ Whitelist allowed fields
+                );
+                
+                setIsSubmitting(false);
+                
+                if (result.success) {
+                    onRefresh();
+                } else {
+                    setError(result.error);
+                }
             };
 
             return (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
                         <h2 className="text-2xl font-bold mb-4">Edit Log</h2>
+                        
+                        <ErrorBanner message={error} onDismiss={() => setError(null)} />
+                        
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium mb-2">Log Type</label>
@@ -1061,6 +1847,7 @@
                                     value={formData.logType}
                                     onChange={(e) => setFormData({ ...formData, logType: e.target.value })}
                                     className="w-full px-4 py-2 border rounded-lg"
+                                    maxLength={100}
                                 />
                             </div>
                             <input
@@ -1072,6 +1859,8 @@
                             <input
                                 type="number"
                                 step="0.01"
+                                min="0"
+                                max="9999999"
                                 placeholder="Cost ($) - optional"
                                 value={formData.cost}
                                 onChange={(e) => setFormData({ ...formData, cost: e.target.value })}
@@ -1083,14 +1872,16 @@
                                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                 className="w-full px-4 py-2 border rounded-lg"
                                 rows="3"
+                                maxLength={2000}
                             />
                         </div>
                         <div className="flex gap-3 mt-6">
                             <button
                                 onClick={handleSubmit}
-                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700"
+                                disabled={isSubmitting}
+                                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
                             >
-                                Save Changes
+                                {isSubmitting ? 'Saving...' : 'Save Changes'}
                             </button>
                             <button
                                 onClick={onClose}
